@@ -1,0 +1,24 @@
+# Generated data — regenerate with scripts/generate_harbour_data.py
+data/
+
+# Credentials — never commit
+.env
+*.pem
+profiles.yml
+.dbt/
+
+# dbt
+target/
+dbt_packages/
+logs/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor / OS
+.vscode/
+.DS_Store
+Thumbs.db
