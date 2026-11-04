@@ -1,0 +1,118 @@
+version: 2
+
+sources:
+  - name: harbour_raw
+    description: >
+      Raw landing tables loaded from S3 via an external stage. Loaded with
+      COPY INTO, untransformed. Every table carries load lineage columns
+      (_source_file, _file_row, _loaded_ts).
+    database: harbour_dev
+    schema: raw
+
+    tables:
+      - name: raw_funds
+        description: One row per fund. Six funds across five strategies.
+        columns:
+          - name: fund_id
+            description: Primary key.
+            data_tests: [unique, not_null]
+          - name: fund_currency
+            description: Reporting currency of the fund (USD, EUR or GBP).
+
+      - name: raw_investors
+        description: One row per limited partner.
+        columns:
+          - name: investor_id
+            description: Primary key.
+            data_tests: [unique, not_null]
+          - name: tax_id
+            description: Sensitive. Masked for non-privileged roles.
+          - name: domicile_country
+            description: ISO country code. Around 8% are missing in source.
+
+      - name: raw_commitments
+        description: >
+          One row per investor per fund. The amount an LP has contractually
+          promised, which is not the same as cash transferred.
+        columns:
+          - name: commitment_id
+            description: Primary key.
+            data_tests: [unique, not_null]
+          - name: investor_id
+            data_tests:
+              - relationships:
+                  arguments:
+                    to: source('harbour_raw', 'raw_investors')
+                    field: investor_id
+          - name: fund_id
+            data_tests:
+              - relationships:
+                  arguments:
+                    to: source('harbour_raw', 'raw_funds')
+                    field: fund_id
+
+      - name: raw_cashflows
+        description: >
+          Capital calls and distributions at investor-fund grain.
+          Contains duplicate rows from a simulated double-load: the same
+          cashflow_id appears more than once with differing loaded_at.
+          Deduplicated in staging.
+        columns:
+          - name: cashflow_id
+            description: >
+              Not unique in raw because of the double-load. Uniqueness is
+              tested in staging after deduplication.
+          - name: cashflow_type
+            description: CAPITAL_CALL or DISTRIBUTION.
+          - name: effective_date
+            description: Date the cashflow applies to.
+          - name: loaded_at
+            description: >
+              Date the row reached the warehouse. Some rows arrive several
+              days after effective_date, which drives the incremental
+              lookback window downstream.
+
+      - name: raw_portfolio_companies
+        description: One row per company held by a fund.
+        columns:
+          - name: company_id
+            data_tests: [unique, not_null]
+          - name: fund_id
+            data_tests:
+              - relationships:
+                  arguments:
+                    to: source('harbour_raw', 'raw_funds')
+                    field: fund_id
+
+      - name: raw_valuations
+        description: >
+          Quarterly NAV estimates per portfolio company. Grain is one row
+          per valuation VERSION, not per valuation: a restatement arrives
+          as a second row with the same valuation_id and a later
+          reported_at. Both versions are retained deliberately and tracked
+          as SCD2 via a snapshot. Do not deduplicate.
+        columns:
+          - name: valuation_id
+            description: >
+              Not unique. Identifies the valuation, not the version.
+              See the snapshot for version history.
+          - name: nav_amount
+            description: Estimated net asset value. Subject to restatement.
+          - name: reported_at
+            description: Date this version was reported. Distinguishes versions.
+
+      - name: raw_fx_rates
+        description: Daily rates to USD for each source currency.
+        columns:
+          - name: rate_date
+            data_tests: [not_null]
+
+      - name: raw_company_kpis
+        description: >
+          Company-reported KPIs as newline-delimited JSON in a VARIANT
+          column. Flattened in staging. Around 10% of company names are
+          abbreviated relative to raw_portfolio_companies.
+        columns:
+          - name: payload
+            description: Full JSON document.
+            data_tests: [not_null]
