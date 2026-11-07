@@ -1,0 +1,43 @@
+version: 2
+
+models:
+  - name: int_valuation_history
+    description: >
+      SCD2 history of valuations. One row per version, with half-open
+      date ranges showing when each version was the firm's current view.
+      18 valuations carry a restatement, so 620 valuations become 638
+      rows.
+    columns:
+      - name: valuation_id
+        description: Not unique - a restated valuation has two rows.
+        data_tests: [not_null]
+      - name: company_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_portfolio_companies')
+                field: company_id
+      - name: nav_amount
+        data_tests: [not_null]
+      - name: valid_from
+        description: Inclusive. When this version was first reported.
+        data_tests: [not_null]
+      - name: valid_to
+        description: >
+          Exclusive. When the next version superseded this one. Null
+          means this version still stands.
+      - name: version_number
+        description: 1 for the original, 2 for a first restatement.
+        data_tests: [not_null]
+      - name: is_current_version
+        description: True for exactly one row per valuation_id.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - valuation_id
+              - valid_from
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "valid_to is null or valid_to > valid_from"
