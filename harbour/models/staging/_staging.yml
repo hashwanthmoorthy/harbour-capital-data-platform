@@ -1,0 +1,198 @@
+version: 2
+
+models:
+  - name: stg_funds
+    description: One row per fund. Target size converted from millions to absolute.
+    columns:
+      - name: fund_id
+        data_tests: [unique, not_null]
+      - name: strategy
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['Buyout', 'Growth', 'Credit', 'Real Estate', 'Infrastructure']
+      - name: fund_currency
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['USD', 'EUR', 'GBP']
+      - name: vintage_year
+        data_tests: [not_null]
+
+  - name: stg_investors
+    description: One row per limited partner. Blank domicile normalised to null.
+    columns:
+      - name: investor_id
+        data_tests: [unique, not_null]
+      - name: investor_name
+        data_tests: [not_null]
+      - name: investor_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['Pension', 'Endowment', 'Sovereign Wealth', 'Insurance', 'Family Office', 'Fund of Funds']
+      - name: domicile_country
+        description: >
+          Nullable by design. Around 8% are missing in source, so no
+          not_null test here - a passing test suite should reflect reality,
+          not an aspiration.
+
+  - name: stg_commitments
+    description: One row per investor per fund. Contractual promise, not cash.
+    columns:
+      - name: commitment_id
+        data_tests: [unique, not_null]
+      - name: investor_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_investors')
+                field: investor_id
+      - name: fund_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_funds')
+                field: fund_id
+      - name: commitment_amount
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                inclusive: false
+
+  - name: stg_cashflows
+    description: >
+      One row per cashflow_id after deduplicating the source double-load.
+      The unique test below is the proof that the QUALIFY worked - it
+      fails against raw and passes here.
+    columns:
+      - name: cashflow_id
+        data_tests: [unique, not_null]
+      - name: investor_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('stg_investors')
+                field: investor_id
+      - name: fund_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('stg_funds')
+                field: fund_id
+      - name: cashflow_type
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['CAPITAL_CALL', 'DISTRIBUTION']
+      - name: currency
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['USD', 'EUR', 'GBP']
+      - name: effective_date
+        data_tests: [not_null]
+      - name: arrival_lag_days
+        description: >
+          Days between effective_date and loaded_at. Drives the lookback
+          window on the incremental fact model. Around 4% of rows arrive
+          several days late.
+
+  - name: stg_portfolio_companies
+    description: One row per company held by a fund.
+    columns:
+      - name: company_id
+        data_tests: [unique, not_null]
+      - name: fund_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_funds')
+                field: fund_id
+      - name: entry_date
+        data_tests: [not_null]
+
+  - name: stg_valuations
+    description: >
+      One row per valuation VERSION. Intentionally not unique on
+      valuation_id - restatements are preserved. See the model header.
+    columns:
+      - name: valuation_id
+        description: Identifies the valuation, not the version. Not unique.
+        data_tests: [not_null]
+      - name: company_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_portfolio_companies')
+                field: company_id
+      - name: nav_amount
+        data_tests: [not_null]
+      - name: reported_at
+        description: Distinguishes versions of the same valuation.
+        data_tests: [not_null]
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - valuation_id
+              - reported_at
+
+  - name: stg_fx_rates
+    description: Daily rates to USD, including USD to USD at 1.0.
+    columns:
+      - name: rate
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                inclusive: false
+      - name: from_currency
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['USD', 'EUR', 'GBP']
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - rate_date
+              - from_currency
+              - to_currency
+
+  - name: stg_company_kpis
+    description: >
+      One row per company per reporting period, flattened from the JSON
+      payload. kpi_company_name is the pack's own spelling and is not
+      reconciled to the company master - join on company_id only.
+    columns:
+      - name: company_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_portfolio_companies')
+                field: company_id
+      - name: reporting_period
+        data_tests: [not_null]
+      - name: ebitda_margin
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: -1
+                max_value: 1
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - company_id
+              - reporting_period
