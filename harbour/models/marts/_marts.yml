@@ -1,0 +1,114 @@
+version: 2
+
+models:
+  - name: dim_fund
+    description: One row per fund with descriptive attributes.
+    columns:
+      - name: fund_id
+        data_tests: [unique, not_null]
+      - name: fund_name
+        data_tests: [not_null]
+      - name: vintage_year
+        data_tests: [not_null]
+
+  - name: dim_investor
+    description: >
+      One row per investor. tax_id is present so a Snowflake masking
+      policy can be applied to the column.
+    columns:
+      - name: investor_id
+        data_tests: [unique, not_null]
+      - name: investor_name
+        data_tests: [not_null]
+
+  - name: dim_company
+    description: >
+      One row per portfolio company with its most recent KPIs. Joined
+      to the KPI pack on company_id, never on name.
+    columns:
+      - name: company_id
+        data_tests: [unique, not_null]
+      - name: fund_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_fund')
+                field: fund_id
+
+  - name: fct_cashflow
+    description: >
+      One row per cashflow. Incremental, filtered on loaded_at with a
+      7 day lookback to catch late arrivals.
+    columns:
+      - name: cashflow_id
+        data_tests: [unique, not_null]
+      - name: fund_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_fund')
+                field: fund_id
+      - name: investor_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_investor')
+                field: investor_id
+      - name: amount_usd
+        data_tests: [not_null]
+      - name: effective_quarter
+        data_tests: [not_null]
+
+  - name: fct_investor_capital_account
+    description: >
+      One row per investor per fund. Committed, called, distributed,
+      unfunded and current value, with DPI and TVPI.
+    columns:
+      - name: investor_id
+        data_tests: [not_null]
+      - name: fund_id
+        data_tests: [not_null]
+      - name: commitment_amount_usd
+        data_tests: [not_null]
+      - name: current_value_usd
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      - name: called_pct
+        description: >
+          No upper bound test. A fund can call slightly over its
+          commitment to cover fees, so above 1.0 is unusual but not
+          invalid.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - investor_id
+              - fund_id
+
+  - name: fct_fund_performance
+    description: >
+      One row per fund per quarter, with cumulative called and
+      distributed amounts and the DPI, TVPI and RVPI series.
+    columns:
+      - name: fund_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_fund')
+                field: fund_id
+      - name: quarter
+        data_tests: [not_null]
+      - name: cumulative_called_usd
+        data_tests: [not_null]
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - fund_id
+              - quarter

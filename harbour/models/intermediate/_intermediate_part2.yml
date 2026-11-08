@@ -1,0 +1,77 @@
+version: 2
+
+models:
+  - name: int_cashflows_usd
+    description: >
+      Every cashflow converted to USD at the rate on its effective_date.
+      Same grain as stg_cashflows. signed_amount_usd makes capital calls
+      negative so net position is a simple sum.
+    columns:
+      - name: cashflow_id
+        data_tests: [unique, not_null]
+      - name: amount_usd
+        data_tests: [not_null]
+      - name: fx_rate
+        description: >
+          Never null. The inner join to fx_rates means a missing rate
+          drops the row, and the row-count test below catches that.
+        data_tests: [not_null]
+      - name: signed_amount_usd
+        data_tests: [not_null]
+    data_tests:
+      - dbt_utils.equal_rowcount:
+          arguments:
+            compare_model: ref('stg_cashflows')
+
+  - name: int_investor_fund_positions
+    description: >
+      One row per investor per fund. Commitments converted at the rate
+      on commitment_date, cashflows rolled up, ownership_pct pro-rata by
+      commitment within each fund.
+    columns:
+      - name: commitment_id
+        data_tests: [unique, not_null]
+      - name: investor_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_investors')
+                field: investor_id
+      - name: fund_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_funds')
+                field: fund_id
+      - name: commitment_amount_usd
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                inclusive: false
+      - name: total_called_usd
+        description: Zero for an investor who has not yet been called.
+        data_tests: [not_null]
+      - name: unfunded_commitment_usd
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      - name: ownership_pct
+        description: Sums to 1.0 within each fund.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - investor_id
+              - fund_id
